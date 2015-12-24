@@ -21,6 +21,7 @@ func btoi(b bool) int {
 
 var globals struct {
     ApiKey string
+    httpClient http.Client
 }
 
 
@@ -142,11 +143,8 @@ func initDb(account string) *sql.DB {
 }
 
 func heartbeat() bool {
-
-    httpClient := &http.Client{}
-
     httpRequest, err := http.NewRequest("GET", "https://api.stockfighter.io/ob/api/heartbeat", nil)
-    httpResponse, err := httpClient.Do(httpRequest)
+    httpResponse, err := globals.httpClient.Do(httpRequest)
 
     if err != nil {
         log.Fatal(err)
@@ -173,11 +171,9 @@ func heartbeat() bool {
 
 func check_venue_inteface(venue string) bool {
 
-    httpClient := &http.Client{}
-
     requestUrl := fmt.Sprintf("https://api.stockfighter.io/ob/api/venues/%s/heartbeat", venue)
     httpRequest, err := http.NewRequest("GET", requestUrl, nil)
-    httpResponse, err := httpClient.Do(httpRequest)
+    httpResponse, err := globals.httpClient.Do(httpRequest)
 
     if err != nil {
         log.Fatal(err)
@@ -203,11 +199,9 @@ func check_venue_inteface(venue string) bool {
 
 func check_venue(venue string) bool {
 
-    httpClient := &http.Client{}
-
     requestUrl := fmt.Sprintf("https://api.stockfighter.io/ob/api/venues/%s/heartbeat", venue)
     httpRequest, err := http.NewRequest("GET", requestUrl, nil)
-    httpResponse, err := httpClient.Do(httpRequest)
+    httpResponse, err := globals.httpClient.Do(httpRequest)
 
     if err != nil {
         log.Fatal(err)
@@ -232,11 +226,9 @@ func check_venue(venue string) bool {
 
 func check_stocks(venue string) bool {
 
-    httpClient := &http.Client{}
-
     requestUrl := fmt.Sprintf("https://api.stockfighter.io/ob/api/venues/%s/stocks", venue)
     httpRequest, err := http.NewRequest("GET", requestUrl, nil)
-    httpResponse, err := httpClient.Do(httpRequest)
+    httpResponse, err := globals.httpClient.Do(httpRequest)
 
     if err != nil {
         log.Fatal(err)
@@ -265,11 +257,9 @@ func check_stocks(venue string) bool {
 
 func update_order_book(venue string, stock string) (bool) {
 
-    httpClient := &http.Client{}
-
     requestUrl := fmt.Sprintf("https://api.stockfighter.io/ob/api/venues/%s/stocks/%s", venue, stock)
     httpRequest, err := http.NewRequest("GET", requestUrl, nil)
-    httpResponse, err := httpClient.Do(httpRequest)
+    httpResponse, err := globals.httpClient.Do(httpRequest)
 
     if err != nil {
         log.Fatal(err)
@@ -350,8 +340,6 @@ func update_order_book(venue string, stock string) (bool) {
 
 func cancel_order(venue string, stock string, id int) bool {
 
-    httpClient := &http.Client{}
-
     requestUrl := fmt.Sprintf("https://api.stockfighter.io/ob/api/venues/%s/stocks/%s/orders/%d", venue, stock, id)
 
     httpRequest, err := http.NewRequest("DELETE", requestUrl, nil)
@@ -359,7 +347,7 @@ func cancel_order(venue string, stock string, id int) bool {
         log.Fatal(err)
     }
     httpRequest.Header.Add("X-Starfighter-Authorization", globals.ApiKey)
-    httpResponse, err := httpClient.Do(httpRequest)
+    httpResponse, err := globals.httpClient.Do(httpRequest)
 
     if err != nil {
         log.Fatal(err)
@@ -379,9 +367,8 @@ func cancel_order(venue string, stock string, id int) bool {
     return tempJson.Ok
 }
 
-func place_order(venue string, stock string, direction string, account string, qty int, price int, orderType string, db *sql.DB) (bool, int, int) {
+func place_order(venue string, stock string, direction string, account string, qty int, price int, orderType string) (bool, int, int) {
 
-    httpClient := &http.Client{}
 
     requestUrl := fmt.Sprintf("https://api.stockfighter.io/ob/api/venues/%s/stocks/%s/orders", venue, stock)
 
@@ -390,7 +377,7 @@ func place_order(venue string, stock string, direction string, account string, q
 
     httpRequest, err := http.NewRequest("POST", requestUrl, bytes.NewBuffer(jsonStr))
     httpRequest.Header.Add("X-Starfighter-Authorization", globals.ApiKey)
-    httpResponse, err := httpClient.Do(httpRequest)
+    httpResponse, err := globals.httpClient.Do(httpRequest)
 
     if err != nil {
         log.Fatal(err)
@@ -498,13 +485,12 @@ func update_position_sql(stock string, change int, price int, db *sql.DB){
 }
 
 func get_all_orders(account string, venue string, stock string) bool {
-    httpClient := &http.Client{}
 
     requestUrl := fmt.Sprintf("https://api.stockfighter.io/ob/api/venues/%s/accounts/%s/stocks/%s/orders", venue, account, stock)
 
     httpRequest, err := http.NewRequest("GET", requestUrl, nil)
     httpRequest.Header.Add("X-Starfighter-Authorization", globals.ApiKey)
-    httpResponse, err := httpClient.Do(httpRequest)
+    httpResponse, err := globals.httpClient.Do(httpRequest)
 
     if err != nil {
         fmt.Printf("%s\n", httpResponse)
@@ -578,19 +564,17 @@ func update_order_and_position(newOrder *Order, oldOrder *Order)  {
 } else {
     update_position(newOrder.Symbol, cashDiff, -qtyDiff)
 }
-    //fmt.Printf("Order %d Details: %v\n", newOrder.Id, *newOrder)
-    data.Orders[newOrder.Id] = *newOrder;
+//fmt.Printf("Order %d Details: %v\n", newOrder.Id, *newOrder)
+data.Orders[newOrder.Id] = *newOrder;
 }
 
-func check_order_status(id int, venue string, stock string, db *sql.DB) bool {
-
-    httpClient := &http.Client{}
+func check_order_status(id int, venue string, stock string) bool {
 
     requestUrl := fmt.Sprintf("https://api.stockfighter.io/ob/api/venues/%s/stocks/%s/orders/%d", venue, stock, id)
 
     httpRequest, err := http.NewRequest("GET", requestUrl, nil)
     httpRequest.Header.Add("X-Starfighter-Authorization", globals.ApiKey)
-    httpResponse, err := httpClient.Do(httpRequest)
+    httpResponse, err := globals.httpClient.Do(httpRequest)
 
     if err != nil {
         log.Fatal(err)
@@ -638,11 +622,11 @@ func check_order_status(id int, venue string, stock string, db *sql.DB) bool {
     return tempJson.Ok
 }
 
-func review_orders(db *sql.DB) {
+func review_orders() {
     for id, order:= range data.Orders {
         if (order.Open) {
             //fmt.Printf("Checking order %d %v \n",id,order)
-            check_order_status(id, data.Venue, order.Symbol, db)
+            check_order_status(id, data.Venue, order.Symbol)
         }
     }
 }
@@ -656,48 +640,13 @@ func cancel_all_orders() {
 }
 
 
-func main() {
-    //Read API key from file
-
-    content, err := ioutil.ReadFile("./keyfile.dat")
-
-    globals.ApiKey = string(content);
-
-    if err != nil {
-        log.Fatal(err)
-    }
-
-    data.Id = "HKS34098810"
-    data.Venue = "EZDLEX"
-    data.Orders = make(map[int]Order)
-    data.Positions = make(map[string]Position)
-    data.Stocks = append(data.Stocks,"MUED")
-
-    fmt.Printf("Start Main Loop\n")
-    for _, stock := range data.Stocks {
-        get_all_orders(data.Id,data.Venue, stock)
-    }
-    time.Sleep(1000 * time.Millisecond)
-
-    db := initDb(data.Id);
-    total_filled := 0
-    counter:=0;
-    interval := 2000
-    for total_filled < 100000 {
-        counter +=1
-        fmt.Printf("Tick %d \n",counter)
-        update_order_book(data.Venue, data.Stocks[0])
-        review_orders(db)
-
-        time.Sleep(time.Duration(interval) * time.Millisecond)
-
-        if orderBookHistory.ready {
-
-
-
+func execute_strategy (strategy string) {
+    switch strategy {
+    case "buy":
+        {
             buyPrice:= int(orderBookHistory.avgTopAskPrice)  ;
             buyQty:= 1000;
-            ok, id, filled := place_order(data.Venue, data.Stocks[0], "buy", data.Id, buyQty, buyPrice, "limit",db)
+            ok, id, filled := place_order(data.Venue, data.Stocks[0], "buy", data.Id, buyQty, buyPrice, "limit")
             if (ok) {
                 fmt.Printf("Buy Order sent id:%d price %d filled:%d\n", id, buyPrice, filled)
 
@@ -706,14 +655,89 @@ func main() {
             sellPrice:= int(orderBookHistory.avgTopBidPrice) ;
             sellQty:= 900;
 
-            ok, id, filled = place_order(data.Venue, data.Stocks[0], "sell", data.Id, sellQty, sellPrice, "limit",db)
+            ok, id, filled = place_order(data.Venue, data.Stocks[0], "sell", data.Id, sellQty, sellPrice, "limit")
             if (ok) {
                 fmt.Printf("Sell Order sent id:%d price %d filled:%d\n", id, sellPrice, filled)
 
             }
-            //show_position(db);
         }
+    case "marketMaker":
+        {
+            buyPrice:= int(orderBookHistory.maxTopAskPrice)
+            buyQty:= 1000
+            sellPrice:= int(orderBookHistory.maxTopBidPrice)
+            sellQty:= 1000
 
+            maxInventory := 10000
+            //Avoid building excessive inventory
+            if postion.Owned < maxInventory {
+                //Avoid self trades
+                if buyPrice < sellPrice {
+                    ok, id, filled := place_order(data.Venue, data.Stocks[0], "buy", data.Id, buyQty, buyPrice, "immediate-or-cancel")
+                    if (ok) {
+                        fmt.Printf("Buy Order sent id:%d price %d filled:%d\n", id, buyPrice, filled)
+
+                    }
+                }
+            }
+
+            //Avoid building excessive inventory
+            if postion.Owned > -maxInventory {
+                //Avoid self trades
+                if buyPrice < sellPrice {
+                    ok, id, filled = place_order(data.Venue, data.Stocks[0], "sell", data.Id, sellQty, sellPrice, "immediate-or-cancel")
+                    if (ok) {
+                        fmt.Printf("Sell Order sent id:%d price %d filled:%d\n", id, sellPrice, filled)
+
+                    }
+                }
+            }
+
+
+        }
+    }
+}
+
+
+func main() {
+    //Read API key from file
+    content, err := ioutil.ReadFile("./keyfile.dat")
+
+    //Init globals
+    globals.ApiKey = string(content);
+    globals.httpClient = http.Client{}
+
+    //Init game data
+    data.Id = "HKS34098810"
+    data.Venue = "EZDLEX"
+    data.Stocks = append(data.Stocks,"MUED")
+    data.Orders = make(map[int]Order)
+    data.Positions = make(map[string]Position)
+
+    fmt.Printf("\nStart Main Loop\n")
+
+    //Sync position and order status from server
+    for _, stock := range data.Stocks {
+        get_all_orders(data.Id,data.Venue, stock)
     }
 
+    counter:=0;
+
+    interval := 2000
+    for ;; {
+        counter +=1
+        fmt.Printf("Tick %d \n",counter)
+        //Check for new fills to update position
+        review_orders()
+
+        //Update order book
+        update_order_book(data.Venue, data.Stocks[0])
+
+        //Execute strategy
+        if orderBookHistory.ready {
+            execute_strategy("marketMaker");
+            //execute_strategy("buy");
+        }
+        time.Sleep(time.Duration(interval) * time.Millisecond)
+    }
 }
