@@ -46,18 +46,20 @@ var orderBook OrderBook;
 
 var orderBookHistory struct {
     ready bool
-    history []OrderBook;
-    avgTopBidQty float64;
-    avgTopAskQty float64;
+    history []OrderBook
+    avgTopBidQty float64
+    avgTopAskQty float64
 
-    avgTopBidPrice float64;
-    avgTopAskPrice float64;
+    avgTopBidPrice float64
+    avgTopAskPrice float64
 
-    minTopBidPrice int;
-    maxTopBidPrice int;
+    minTopBidPrice int
+    maxTopBidPrice int
 
-    minTopAskPrice int;
-    maxTopAskPrice int;
+    minTopAskPrice int
+    maxTopAskPrice int
+    quotedAsk int
+    quotedBid int
 }
 
 
@@ -65,6 +67,7 @@ type Position struct {
     Stock string
     Owned int
     Balance int
+    NAV int
 }
 
 var data struct {
@@ -518,7 +521,7 @@ func get_all_orders(account string, venue string, stock string) bool {
 
 }
 
-func update_position(stock string , qtyDiff int , cashDiff int)  {
+func update_position(stock string , cashDiff int, qtyDiff int)  {
     owned:=0
     balance:=0
     if  savedPosition, ok := data.Positions[stock]; ok  {
@@ -530,8 +533,10 @@ func update_position(stock string , qtyDiff int , cashDiff int)  {
         Stock       :stock,
         Owned       :owned   + qtyDiff ,
         Balance     :balance + cashDiff,
+        NAV         :balance+cashDiff + owned *  int(orderBookHistory.avgTopBidPrice  + orderBookHistory.avgTopAskPrice) /2,
     }
 
+    
     data.Positions[stock] = newPosition;
     fmt.Printf("New Position %v\n", newPosition)
 
@@ -663,34 +668,32 @@ func execute_strategy (strategy string) {
         }
     case "marketMaker":
         {
-            buyPrice:= int(orderBookHistory.maxTopAskPrice)
-            buyQty:= 1000
-            sellPrice:= int(orderBookHistory.maxTopBidPrice)
-            sellQty:= 1000
+            estimate := int(orderBookHistory.avgTopBidPrice + orderBookHistory.avgTopAskPrice )/2
+            buyPrice:=  estimate-10
+            buyQty:= 100
+            sellPrice:=  estimate+10
+            sellQty:= 100
 
-            maxInventory := 10000
+            maxInventory := 500
+            fmt.Printf("Owned :%d\n", data.Positions[data.Stocks[0]].Owned )
             //Avoid building excessive inventory
-            if postion.Owned < maxInventory {
+            if  data.Positions[data.Stocks[0]].Owned< maxInventory {
                 //Avoid self trades
-                if buyPrice < sellPrice {
-                    ok, id, filled := place_order(data.Venue, data.Stocks[0], "buy", data.Id, buyQty, buyPrice, "immediate-or-cancel")
+                    ok, id, filled := place_order(data.Venue, data.Stocks[0], "buy", data.Id, buyQty, buyPrice, "limit")
                     if (ok) {
                         fmt.Printf("Buy Order sent id:%d price %d filled:%d\n", id, buyPrice, filled)
 
-                    }
                 }
             }
 
             //Avoid building excessive inventory
-            if postion.Owned > -maxInventory {
+            if data.Positions[data.Stocks[0]].Owned > -maxInventory {
                 //Avoid self trades
-                if buyPrice < sellPrice {
-                    ok, id, filled = place_order(data.Venue, data.Stocks[0], "sell", data.Id, sellQty, sellPrice, "immediate-or-cancel")
+                    ok, id, filled := place_order(data.Venue, data.Stocks[0], "sell", data.Id, sellQty, sellPrice, "limit"
                     if (ok) {
                         fmt.Printf("Sell Order sent id:%d price %d filled:%d\n", id, sellPrice, filled)
 
                     }
-                }
             }
 
 
@@ -702,15 +705,18 @@ func execute_strategy (strategy string) {
 func main() {
     //Read API key from file
     content, err := ioutil.ReadFile("./keyfile.dat")
+    if err != nil {
+        log.Fatal(err)
+    }
 
     //Init globals
     globals.ApiKey = string(content);
     globals.httpClient = http.Client{}
 
     //Init game data
-    data.Id = "HKS34098810"
-    data.Venue = "EZDLEX"
-    data.Stocks = append(data.Stocks,"MUED")
+    data.Id = "HB84980"
+    data.Venue = "HCOPEX"
+    data.Stocks = append(data.Stocks,"PDIM")
     data.Orders = make(map[int]Order)
     data.Positions = make(map[string]Position)
 
@@ -718,12 +724,13 @@ func main() {
 
     //Sync position and order status from server
     for _, stock := range data.Stocks {
+    fmt.Printf("\nGet All Orders\n")
         get_all_orders(data.Id,data.Venue, stock)
     }
 
     counter:=0;
 
-    interval := 2000
+    interval := 500
     for ;; {
         counter +=1
         fmt.Printf("Tick %d \n",counter)
