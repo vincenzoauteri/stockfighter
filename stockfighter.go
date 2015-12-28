@@ -24,6 +24,23 @@ var globals struct {
     httpClient http.Client
 }
 
+type StockQuote struct {
+    Ok bool  `json:"ok"`
+    Symbol string `json:"symbol"`
+    Venue string  `json:"venue"`
+    Bid int  `json:"bid"`
+    Ask int `json:"ask"`
+    BidSize int  `json:"bidSize"`
+    AskSize int `json:"askSize"`
+    BidDepth int  `json:"bidDepth"`
+    AskDepth int `json:"askDepth"`
+    Last int `json:"last"`
+    LastSize int `json:"lastSize"`
+    LastTrade string  `json:"lastTrade"`
+    QuiteTime string `json:"quoteTime"`
+}
+
+var stockQuote StockQuote
 
 type OrderBook struct {
     Ok     bool   `json:"ok"`
@@ -42,11 +59,13 @@ type OrderBook struct {
     Ts string `json:ts`
 }
 
-var orderBook OrderBook;
+var orderBook OrderBook
 
 var orderBookHistory struct {
     ready bool
     history []OrderBook
+    lastTopBidPrice int
+    lastTopAskPrice int
     avgTopBidQty float64
     avgTopAskQty float64
 
@@ -227,6 +246,28 @@ func check_venue(venue string) bool {
     return tempJson.Ok
 }
 
+func quote_stock(venue string, stock string) bool {
+    requestUrl := fmt.Sprintf("https://api.stockfighter.io/ob/api/venues/%s/stocks/%s/quote", venue, stock)
+    httpRequest, err := http.NewRequest("GET", requestUrl, nil)
+    httpResponse, err := globals.httpClient.Do(httpRequest)
+
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    responseData, err := ioutil.ReadAll(httpResponse.Body)
+
+
+    err = json.Unmarshal([]byte(responseData), &stockQuote)
+
+    fmt.Printf("Last price: %2f\n",float32(stockQuote.Last) )
+
+    if err != nil {
+        log.Fatal(err)
+    }
+    return stockQuote.Ok
+}
+
 func check_stocks(venue string) bool {
 
     requestUrl := fmt.Sprintf("https://api.stockfighter.io/ob/api/venues/%s/stocks", venue)
@@ -277,7 +318,9 @@ func update_order_book(venue string, stock string) (bool) {
 
     orderBookHistory.history = append(orderBookHistory.history, orderBook);
 
-    MOVING_AVERAGE := 10
+    //fmt.Printf("Update Order Book: %s\n\n", responseData)
+
+    MOVING_AVERAGE := 50
     historyLength := len(orderBookHistory.history)
     orderBookHistory.avgTopBidQty = 0;
     orderBookHistory.avgTopBidPrice= 0;
@@ -295,6 +338,7 @@ func update_order_book(venue string, stock string) (bool) {
             if  len(ob.Bids) > 0 {
                 orderBookHistory.avgTopBidQty += float64(ob.Bids[0].Qty)
                 orderBookHistory.avgTopBidPrice += float64(ob.Bids[0].Price)
+                orderBookHistory.lastTopBidPrice = ob.Bids[0].Price
                 if  ob.Bids[0].Price >  orderBookHistory.maxTopBidPrice {
                     orderBookHistory.maxTopBidPrice  = ob.Bids[0].Price
                 }
@@ -307,6 +351,7 @@ func update_order_book(venue string, stock string) (bool) {
             if  len(ob.Asks) > 0 {
                 orderBookHistory.avgTopAskQty += float64(ob.Asks[0].Qty)
                 orderBookHistory.avgTopAskPrice+= float64(ob.Asks[0].Price)
+                orderBookHistory.lastTopAskPrice = ob.Asks[0].Price
                 if  ob.Asks[0].Price >  orderBookHistory.maxTopAskPrice {
                     orderBookHistory.maxTopAskPrice= ob.Asks[0].Price
                 }
@@ -326,7 +371,7 @@ func update_order_book(venue string, stock string) (bool) {
         }
     }
 
-    fmt.Printf("AvgTopAskPrice: %f AvgTopBidPrice :%f \n\n", orderBookHistory.avgTopAskPrice, orderBookHistory.avgTopBidPrice)
+    //fmt.Printf("AvgTopAskPrice: %f AvgTopBidPrice :%f \n\n", orderBookHistory.avgTopAskPrice, orderBookHistory.avgTopBidPrice)
 
 
     if err != nil {
@@ -533,10 +578,8 @@ func update_position(stock string , cashDiff int, qtyDiff int)  {
         Stock       :stock,
         Owned       :owned   + qtyDiff ,
         Balance     :balance + cashDiff,
-        NAV         :balance+cashDiff + owned *  int(orderBookHistory.avgTopBidPrice  + orderBookHistory.avgTopAskPrice) /2,
+        NAV         :balance + cashDiff + owned * stockQuote.Last,
     }
-
-    
     data.Positions[stock] = newPosition;
     fmt.Printf("New Position %v\n", newPosition)
 
@@ -649,16 +692,16 @@ func execute_strategy (strategy string) {
     switch strategy {
     case "buy":
         {
-            buyPrice:= int(orderBookHistory.avgTopAskPrice)  ;
             buyQty:= 1000;
+            buyPrice:= int(orderBookHistory.avgTopAskPrice)  ;
             ok, id, filled := place_order(data.Venue, data.Stocks[0], "buy", data.Id, buyQty, buyPrice, "limit")
             if (ok) {
                 fmt.Printf("Buy Order sent id:%d price %d filled:%d\n", id, buyPrice, filled)
 
             }
 
-            sellPrice:= int(orderBookHistory.avgTopBidPrice) ;
             sellQty:= 900;
+            sellPrice:= int(orderBookHistory.avgTopBidPrice) ;
 
             ok, id, filled = place_order(data.Venue, data.Stocks[0], "sell", data.Id, sellQty, sellPrice, "limit")
             if (ok) {
@@ -668,35 +711,43 @@ func execute_strategy (strategy string) {
         }
     case "marketMaker":
         {
-            estimate := int(orderBookHistory.avgTopBidPrice + orderBookHistory.avgTopAskPrice )/2
-            buyPrice:=  estimate-10
-            buyQty:= 100
-            sellPrice:=  estimate+10
-            sellQty:= 100
+            //estimate := int(orderBookHistory.avgTopBidPrice + orderBookHistory.avgTopAskPrice )/2
+            spread := orderBookHistory.lastTopAskPrice - orderBookHistory.lastTopBidPrice
+            buyPrice := orderBookHistory.minTopAskPrice
+            orderBookHistory.quotedBid = buyPrice;
 
-            maxInventory := 500
+            sellPrice := orderBookHistory.maxTopBidPrice
+            orderBookHistory.quotedAsk = sellPrice;
+
+            cancel_all_orders()
+
             fmt.Printf("Owned :%d\n", data.Positions[data.Stocks[0]].Owned )
-            //Avoid building excessive inventory
-            if  data.Positions[data.Stocks[0]].Owned< maxInventory {
-                //Avoid self trades
-                    ok, id, filled := place_order(data.Venue, data.Stocks[0], "buy", data.Id, buyQty, buyPrice, "limit")
-                    if (ok) {
-                        fmt.Printf("Buy Order sent id:%d price %d filled:%d\n", id, buyPrice, filled)
+            fmt.Printf("Buyprice :%d SellPrice :%d Last Spread :%d\n", buyPrice, sellPrice, spread)
 
+            buyQty :=  100 - data.Positions[data.Stocks[0]].Owned
+
+            sellQty := 100 + data.Positions[data.Stocks[0]].Owned
+
+            //if ( data.Positions[data.Stocks[0]].Owned < 0) {
+            if ( buyQty > 0){
+                ok, id, filled := place_order(data.Venue, data.Stocks[0], "buy", data.Id, buyQty, buyPrice, "limit")
+                if (ok) {
+                    fmt.Printf("Buy Order sent id:%d price %d filled:%d\n", id, buyPrice, filled)
                 }
             }
-
-            //Avoid building excessive inventory
-            if data.Positions[data.Stocks[0]].Owned > -maxInventory {
-                //Avoid self trades
-                    ok, id, filled := place_order(data.Venue, data.Stocks[0], "sell", data.Id, sellQty, sellPrice, "limit"
-                    if (ok) {
-                        fmt.Printf("Sell Order sent id:%d price %d filled:%d\n", id, sellPrice, filled)
-
-                    }
+            //} else if ( data.Positions[data.Stocks[0]].Owned > 0) {
+            if ( sellQty > 0){
+                ok, id, filled := place_order(data.Venue, data.Stocks[0], "sell", data.Id, sellQty, sellPrice, "limit")
+                if (ok) {
+                    fmt.Printf("Sell Order sent id:%d price %d filled:%d\n", id, sellPrice, filled)
+                }
+            //} else {
+            //    buyQty := 100
+            //    ok, id, filled := place_order(data.Venue, data.Stocks[0], "buy", data.Id, buyQty, buyPrice, "limit")
+            //    if (ok) {
+            //        fmt.Printf("Buy Order sent id:%d price %d filled:%d\n", id, buyPrice, filled)
+            //    }
             }
-
-
         }
     }
 }
@@ -714,9 +765,9 @@ func main() {
     globals.httpClient = http.Client{}
 
     //Init game data
-    data.Id = "HB84980"
-    data.Venue = "HCOPEX"
-    data.Stocks = append(data.Stocks,"PDIM")
+    data.Id = "EHH92359398"
+    data.Venue = "GVUEX"
+    data.Stocks = append(data.Stocks,"KAR")
     data.Orders = make(map[int]Order)
     data.Positions = make(map[string]Position)
 
@@ -730,12 +781,14 @@ func main() {
 
     counter:=0;
 
-    interval := 500
+    interval := 1000
     for ;; {
         counter +=1
         fmt.Printf("Tick %d \n",counter)
         //Check for new fills to update position
         review_orders()
+
+        quote_stock(data.Venue, data.Stocks[0])
 
         //Update order book
         update_order_book(data.Venue, data.Stocks[0])
