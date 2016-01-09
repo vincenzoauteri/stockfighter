@@ -92,6 +92,9 @@ var quoteHistory struct {
     minTopAskPrice int
     maxTopAskPrice int
 
+    lastBidPrice int
+    lastAskPrice int
+
     lastBidId int
     lastAskId int
 }
@@ -374,7 +377,7 @@ func check_stocks(venue string) bool {
 
 func update_quotes() {
     ts := time.Now()
-    MOVING_AVERAGE := 100
+    MOVING_AVERAGE := 1000
     quoteHistory.avgTopBidQty = 0;
     quoteHistory.avgTopBidPrice= 0;
     quoteHistory.avgTopAskQty= 0;
@@ -401,6 +404,7 @@ func update_quotes() {
             if  quote.Bid <  quoteHistory.minTopBidPrice {
                 quoteHistory.minTopBidPrice  = quote.Bid
             }
+            quoteHistory.lastBidPrice = quote.Bid;
             bidAvg+=1
 
             quoteHistory.avgTopAskQty += float64(quote.AskSize)
@@ -412,6 +416,7 @@ func update_quotes() {
             if  quote.Ask <  quoteHistory.minTopAskPrice {
                 quoteHistory.minTopAskPrice= quote.Ask
             }
+            quoteHistory.lastAskPrice = quote.Ask;
             askAvg+=1
         }
         if bidAvg > 0 {
@@ -445,6 +450,7 @@ func update_order_book(venue string, stock string) (bool) {
     }
 
     err = json.Unmarshal([]byte(responseData), &orderBook)
+
 
     orderBookHistory.history = append(orderBookHistory.history, orderBook);
 
@@ -498,6 +504,7 @@ func update_order_book(venue string, stock string) (bool) {
             orderBookHistory.avgTopAskQty /= askAvg;
             orderBookHistory.avgTopAskPrice /= askAvg;
         }
+
     }
 
     //fmt.Printf("AvgTopAskPrice: %f AvgTopBidPrice :%f \n\n", orderBookHistory.avgTopAskPrice, orderBookHistory.avgTopBidPrice)
@@ -701,8 +708,8 @@ func update_order_and_position(newOrder *Order, oldOrder *Order)  {
     qtyDiff:=0
     if oldOrder ==  nil {
         for _ , fill := range newOrder.Fills {
-            t,_ := time.Parse(time.RFC3339Nano ,fill.Ts)
-            fmt.Printf("Adding fill to Order %d price %d qty %d, Timestamp %s \n", newOrder.Id,fill.Price,fill.Qty,t )
+            //t,_ := time.Parse(time.RFC3339Nano ,fill.Ts)
+            //fmt.Printf("Adding fill to Order %d price %d qty %d, Timestamp %s \n", newOrder.Id,fill.Price,fill.Qty,t )
             cashDiff+=(fill.Price*fill.Qty)
             qtyDiff+=fill.Qty
         }
@@ -735,8 +742,8 @@ func update_executions_and_position()  {
     oldOrder , ok := data.Orders[order.Id]
     if !ok {
         for _ , fill := range order.Fills {
-            t,_ := time.Parse(time.RFC3339Nano ,fill.Ts)
-            fmt.Printf("Adding fill to Order %d price %d qty %d, Timestamp %s \n", order.Id,fill.Price,fill.Qty,t )
+            //t,_ := time.Parse(time.RFC3339Nano ,fill.Ts)
+            //fmt.Printf("Adding fill to Order %d price %d qty %d, Timestamp %s \n", order.Id,fill.Price,fill.Qty,t )
             cashDiff+=(fill.Price*fill.Qty)
             qtyDiff+=fill.Qty
         }
@@ -754,9 +761,9 @@ func update_executions_and_position()  {
         }
     }
     if order.Direction == "buy" {
-        update_position(order.Symbol, -cashDiff, qtyDiff)
+        //update_position(order.Symbol, -cashDiff, qtyDiff)
     } else {
-        update_position(order.Symbol, cashDiff, -qtyDiff)
+        //update_position(order.Symbol, cashDiff, -qtyDiff)
     }
     //fmt.Printf("Order %d Details: %v\n", newOrder.Id, *order)
     data.Orders[order.Id] = order;
@@ -788,7 +795,7 @@ func check_order_status(id int, venue string, stock string) bool {
     if tempJson.Ok {
 
         if  savedOrder, ok :=  data.Orders[id]; ok {
-                update_order_and_position(&tempJson, &savedOrder)
+            update_order_and_position(&tempJson, &savedOrder)
         }
     }else {
         fmt.Printf("Response NOK %s\n",responseData)
@@ -882,6 +889,71 @@ func execute_strategy (strategy string) {
                 }
             }
         }
+    case "level4":
+        {
+            //spread := quoteHistory.lastTopAskPrice - quoteHistory.lastTopBidPrice
+                buyPrice := int(quoteHistory.avgTopBidPrice)
+                sellPrice := int(quoteHistory.avgTopAskPrice)
+            if  data.Positions[data.Stocks[0]].Owned >= -200 {
+                buyPrice = int(quoteHistory.minTopAskPrice)
+            }
+
+            if  data.Positions[data.Stocks[0]].Owned <= 200 {
+                sellPrice = int(quoteHistory.maxTopBidPrice)
+            }
+            fmt.Printf("Buyprice :%d AverageBidPrice :%d SellPrice: %d AverageAskPrice: %d\n", 
+            buyPrice, int(quoteHistory.avgTopBidPrice),sellPrice,int(quoteHistory.avgTopAskPrice));
+
+            //buyQty :=  100- data.Positions[data.Stocks[0]].Owned/2
+
+            //sellQty := 100+ data.Positions[data.Stocks[0]].Owned/2
+
+            buyQty :=  100 ;
+
+                sellQty := 100  ;
+
+            lastAskOrder := data.Orders[quoteHistory.lastAskId]
+            lastBidOrder := data.Orders[quoteHistory.lastBidId]
+            //if (quoteHistory.avgTopAskPrice - float64(quoteHistory.minTopAskPrice))  > quoteHistory.avgTopAskPrice*0.1 {
+            if data.Positions[data.Stocks[0]].Owned < 500 && !lastBidOrder.Open {
+                ok, id, filled := place_order(data.Venue, data.Stocks[0], "buy", data.Id, buyQty, buyPrice, "limit")
+                if (ok) {
+                    fmt.Printf("Buy Order sent id:%d price %d filled:%d\n", id, buyPrice, filled)
+                    quoteHistory.lastBidId = id;
+                }
+            }
+            if (lastBidOrder.Open) {
+                tOld, _ := time.Parse(time.RFC3339Nano ,lastBidOrder.Ts)
+                tNow, _ := time.Parse(time.RFC3339Nano ,stockQuoteWs.Quote.QuoteTime)
+                fmt.Printf("Time Elapsed from buy order %s\n", (tNow.Sub(tOld)).String());
+                if tNow.Sub(tOld) > time.Duration(20)*time.Second {
+                    ok := cancel_order(data.Venue, lastBidOrder.Symbol, lastBidOrder.Id)
+                    if ok {
+                        fmt.Printf("Canceled Buy Order id:%d \n", lastBidOrder.Id)
+                    }
+                }
+            }
+            //if (float64(quoteHistory.maxTopBidPrice) - quoteHistory.avgTopBidPrice)  > quoteHistory.avgTopBidPrice*0.1 {
+            if  sellPrice >  0 && data.Positions[data.Stocks[0]].Owned > -500 && !lastAskOrder.Open {
+                ok, id, filled := place_order(data.Venue, data.Stocks[0], "sell", data.Id, sellQty, sellPrice, "limit")
+                if (ok) {
+                    fmt.Printf("Sell Order sent id:%d price %d filled:%d\n", id, sellPrice, filled)
+                    quoteHistory.lastAskId = id;
+                }
+            }
+            if (lastAskOrder.Open) {
+                tOld, _ := time.Parse(time.RFC3339Nano ,lastAskOrder.Ts)
+                tNow, _ := time.Parse(time.RFC3339Nano ,stockQuoteWs.Quote.QuoteTime)
+                fmt.Printf("Time Elapsed from buy order %s\n", (tNow.Sub(tOld)).String());
+                if tNow.Sub(tOld) > time.Duration(20)*time.Second {
+                    ok := cancel_order(data.Venue, lastAskOrder.Symbol, lastAskOrder.Id)
+                    if ok {
+                        fmt.Printf("Canceled Buy Order id:%d \n", lastAskOrder.Id)
+                    }
+                }
+            }
+            // }
+        }
     }
 }
 
@@ -935,9 +1007,9 @@ func main() {
     globals.httpClient = http.Client{}
 
     //Init game data
-    data.Id = "NB89431057"
-    data.Venue = "EPTMEX"
-    data.Stocks = append(data.Stocks,"PFM")
+    data.Id = "FMB75081984"
+    data.Venue = "EPOREX"
+    data.Stocks = append(data.Stocks,"SDI")
     data.Orders = make(map[int]Order)
     data.Positions = make(map[string]Position)
 
@@ -963,11 +1035,15 @@ func main() {
             profiling.Executions)
         }
 
+        data.Positions = make(map[string]Position)
+        get_all_orders(data.Id,data.Venue, data.Stocks[0])
+
         show_position()
+
         //Execute strategy
         update_quotes()
         if quoteHistory.ready {
-            execute_strategy("marketMaker");
+            execute_strategy("level4");
             //execute_strategy("buy");
         }
         time.Sleep(time.Duration(interval) * time.Millisecond)
